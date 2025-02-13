@@ -43,6 +43,7 @@ from .utils import (
     chunked,
     ensure_datetime,
     get_instance,
+    get_retry_after,
     is_interactive,
     is_page2_url,
     joinurl,
@@ -236,6 +237,13 @@ class RESTFullAPIClient:
                             )
                             if data is not None and hasattr(data, "seek"):
                                 data.seek(0)
+                        if retry_after := get_retry_after(result):
+                            lgr.debug(
+                                "Sleeping for %d seconds as instructed in response "
+                                "(in addition to tenacity imposed)",
+                                retry_after,
+                            )
+                            sleep(retry_after)
                         result.raise_for_status()
         except Exception as e:
             if isinstance(e, requests.HTTPError):
@@ -2015,6 +2023,19 @@ class RemoteZarrEntry:
                 return False
         return True
 
+    @property
+    def download_url(self) -> str:
+        """
+        .. versionadded:: 0.67.0
+
+        The URL from which the entry can be downloaded
+        """
+        return str(
+            URL(self.client.get_url(f"/zarr/{self.zarr_id}/files/")).with_query(
+                {"prefix": str(self), "download": "true"}
+            )
+        )
+
     def get_download_file_iter(
         self, chunk_size: int = MAX_CHUNK_SIZE
     ) -> Callable[[int], Iterator[bytes]]:
@@ -2022,11 +2043,7 @@ class RemoteZarrEntry:
         Returns a function that when called (optionally with an offset into the
         file to start downloading at) returns a generator of chunks of the file
         """
-        url = str(
-            URL(self.client.get_url(f"/zarr/{self.zarr_id}/files/")).with_query(
-                {"prefix": str(self), "download": "true"}
-            )
-        )
+        url = self.download_url
 
         def downloader(start_at: int = 0) -> Iterator[bytes]:
             lgr.debug("Starting download from %s", url)
